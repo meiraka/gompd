@@ -50,6 +50,9 @@ type Client struct {
 // Attrs is a set of attributes returned by MPD.
 type Attrs map[string]string
 
+// Tags is a audio file metadata returned by MPD.
+type Tags map[string][]string
+
 // Dial connects to MPD listening on address addr (e.g. "127.0.0.1:6600")
 // on network network (e.g. "tcp").
 func Dial(network, addr string) (c *Client, err error) {
@@ -177,6 +180,62 @@ func (c *Client) readAttrs(terminator string) (attrs Attrs, err error) {
 	return
 }
 
+func (c *Client) readTagsList(startKey string) (tags []Tags, err error) {
+	tags = []Tags{}
+	startKey += ": "
+	for {
+		line, err := c.text.ReadLine()
+		if err != nil {
+			return nil, err
+		}
+		if line == "OK" {
+			break
+		}
+		if strings.HasPrefix(line, startKey) { // new entry begins
+			tags = append(tags, Tags{})
+		}
+		if len(tags) == 0 {
+			return nil, textproto.ProtocolError("unexpected: " + line)
+		}
+		i := strings.Index(line, ": ")
+		if i < 0 {
+			return nil, textproto.ProtocolError("can't parse line: " + line)
+		}
+		key := line[0:i]
+		index := len(tags) - 1
+		if _, found := tags[index][key]; !found {
+			tags[index][key] = []string{line[i+2:]}
+		} else {
+			tags[index][key] = append(tags[index][key], line[i+2:])
+		}
+	}
+	return tags, nil
+}
+
+func (c *Client) readTags(terminator string) (tags Tags, err error) {
+	tags = make(Tags)
+	for {
+		line, err := c.text.ReadLine()
+		if err != nil {
+			return nil, err
+		}
+		if line == terminator {
+			break
+		}
+		z := strings.Index(line, ": ")
+		if z < 0 {
+			return nil, textproto.ProtocolError("can't parse line: " + line)
+		}
+		key := line[0:z]
+		if _, found := tags[key]; !found {
+			tags[key] = []string{line[z+2:]}
+		} else {
+			tags[key] = append(tags[key], line[z+2:])
+		}
+	}
+	return
+}
+
 // CurrentSong returns information about the current song in the playlist.
 func (c *Client) CurrentSong() (Attrs, error) {
 	id, err := c.cmd("currentsong")
@@ -186,6 +245,17 @@ func (c *Client) CurrentSong() (Attrs, error) {
 	c.text.StartResponse(id)
 	defer c.text.EndResponse(id)
 	return c.readAttrs("OK")
+}
+
+// CurrentSongTags returns song tags about the current song in the playlist.
+func (c *Client) CurrentSongTags() (Tags, error) {
+	id, err := c.cmd("currentsong")
+	if err != nil {
+		return nil, err
+	}
+	c.text.StartResponse(id)
+	defer c.text.EndResponse(id)
+	return c.readTags("OK")
 }
 
 // Status returns information about the current status of MPD.
@@ -381,6 +451,40 @@ func (c *Client) PlaylistInfo(start, end int) ([]Attrs, error) {
 	return c.readAttrsList("file")
 }
 
+// PlaylistInfoTags returns tags for songs in the current playlist. If
+// both start and end are negative, it does this for all songs in
+// playlist. If end is negative but start is positive, it does it for the
+// song at position start. If both start and end are positive, it does it
+// for positions in range [start, end).
+func (c *Client) PlaylistInfoTags(start, end int) ([]Tags, error) {
+	var id uint
+	var err error
+
+	switch {
+	case start < 0 && end < 0:
+		// Request all playlist items.
+		id, err = c.cmd("playlistinfo")
+	case start >= 0 && end >= 0:
+		// Request this range of playlist items.
+		id, err = c.cmd("playlistinfo %d:%d", start, end)
+	case start >= 0 && end < 0:
+		// Request the single playlist item at this position.
+		id, err = c.cmd("playlistinfo %d", start)
+	case start < 0 && end >= 0:
+		return nil, errors.New("negative start index")
+	default:
+		panic("unreachable")
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	c.text.StartResponse(id)
+	defer c.text.EndResponse(id)
+	return c.readTagsList("file")
+}
+
 // Delete deletes songs from playlist. If both start and end are positive,
 // it deletes those at positions in range [start, end). If end is negative,
 // it deletes the song at position start.
@@ -541,6 +645,50 @@ func (c *Client) ListAllInfo(uri string) ([]Attrs, error) {
 		}
 	}
 	return attrs, nil
+}
+
+// ListAllInfoTags returns tags for songs in the library. Information about
+// any song that is either inside or matches the passed in uri is returned.
+// To get information about every song in the library, pass in "/".
+func (c *Client) ListAllInfoTags(uri string) ([]Tags, error) {
+	id, err := c.cmd("listallinfo %s ", quote(uri))
+	if err != nil {
+		return nil, err
+	}
+	c.text.StartResponse(id)
+	defer c.text.EndResponse(id)
+
+	tags := []Tags{}
+	inEntry := false
+	for {
+		line, err := c.text.ReadLine()
+		if err != nil {
+			return nil, err
+		}
+		if line == "OK" {
+			break
+		} else if strings.HasPrefix(line, "file: ") { // new entry begins
+			tags = append(tags, Tags{})
+			inEntry = true
+		} else if strings.HasPrefix(line, "directory: ") {
+			inEntry = false
+		}
+
+		if inEntry {
+			i := strings.Index(line, ": ")
+			if i < 0 {
+				return nil, textproto.ProtocolError("can't parse line: " + line)
+			}
+			key := line[0:i]
+			index := len(tags) - 1
+			if _, found := tags[index][key]; !found {
+				tags[index][key] = []string{line[i+2:]}
+			} else {
+				tags[index][key] = append(tags[index][key], line[i+2:])
+			}
+		}
+	}
+	return tags, nil
 }
 
 // ListInfo lists the contents of the directory URI using MPD's lsinfo command.

@@ -6,6 +6,7 @@ package mpd
 
 import (
 	"os"
+	"reflect"
 	"testing"
 
 	"github.com/meiraka/gompd/mpd/internal/server"
@@ -169,6 +170,29 @@ func TestCurrentSong(t *testing.T) {
 	}
 	if _, ok := attrs["file"]; !ok {
 		t.Fatalf("current song (attrs=%v) has no file attribute", attrs)
+	}
+	if attrs["Artist"] != "bar" {
+		t.Fatalf("current song (attrs=%v) has unexpected Artist attribute, expected %s", attrs, "bar")
+	}
+}
+
+func TestCurrentSongTags(t *testing.T) {
+	cli := localDial(t)
+	defer teardown(cli, t)
+
+	attrs, err := cli.CurrentSongTags()
+	if err != nil {
+		t.Fatalf("Client.CurrentSong() = %v, %s need _, nil", attrs, err)
+	}
+	if len(attrs) == 0 {
+		return // no current song
+	}
+	if _, ok := attrs["file"]; !ok {
+		t.Fatalf("current song (attrs=%v) has no file attribute", attrs)
+	}
+	expect := []string{"foo", "bar"}
+	if !reflect.DeepEqual(attrs["Artist"], expect) {
+		t.Fatalf("current song Artist attribute expected %s, got %s", expect, attrs["Artist"])
 	}
 }
 

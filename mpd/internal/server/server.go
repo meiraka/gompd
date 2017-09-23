@@ -160,6 +160,7 @@ func (s *server) writeResponse(p *textproto.Conn, args []string, okLine string) 
 			p.PrintfLine("Last-Modified: 2014-07-02T12:32:26Z")
 			p.PrintfLine("Artist: Newcleus")
 			p.PrintfLine("Title: Jam On It")
+			p.PrintfLine("Track: 2")
 			p.PrintfLine("Track: 02")
 		}
 		for _, a := range []string{
@@ -402,6 +403,8 @@ func (s *server) writeResponse(p *textproto.Conn, args []string, okLine string) 
 		if s.pos >= s.currentPlaylist.Len() {
 			s.pos = 0
 		}
+		p.PrintfLine("Artist: foo")
+		p.PrintfLine("Artist: bar")
 		p.PrintfLine("file: %s", s.database[s.currentPlaylist.At(s.pos)]["file"])
 	case "outputs":
 		p.PrintfLine("outputid: 0")
